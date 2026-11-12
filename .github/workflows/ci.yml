@@ -1,0 +1,104 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test + coverage (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runs-on: ubuntu-latest
+          - arch: arm64
+            runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "$out"; exit 1; fi
+      - name: Vet
+        run: go vet ./...
+      # The coverage gate is the cfb package; cfbtest is the test-only writer.
+      - name: Test and coverage
+        run: go test -timeout 20m -coverprofile=cover.out .
+      - name: Coverage is 100%
+        run: |
+          total=$(go tool cover -func=cover.out | tail -1 | awk '{print $3}')
+          echo "coverage: $total"
+          [ "$total" = "100.0%" ]
+
+  race:
+    name: race (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runs-on: ubuntu-latest
+          - arch: arm64
+            runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - run: go test -race -timeout 30m ./...
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - run: go test -run '^$' -fuzz '^FuzzOpen$' -fuzztime 60s -fuzzminimizetime 5s .
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # Big-endian: every field is little-endian on disk, the opposite of s390x, so
+  # this checks the decoding is explicit.
+  s390x:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - name: Set up QEMU
+        run: docker run --privileged --rm tonistiigi/binfmt --install s390x
+      - name: Test under QEMU
+        env:
+          GOOS: linux
+          GOARCH: s390x
+          CGO_ENABLED: '0'
+        run: |
+          go test -c -o cfb.test .
+          docker run --rm --platform linux/s390x -v "$PWD:/work" -w /work debian:trixie ./cfb.test -test.v -test.timeout 30m
