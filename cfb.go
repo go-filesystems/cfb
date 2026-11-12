@@ -173,10 +173,12 @@ func (f *File) loadFAT(h []byte) error {
 	}
 	add(h[76 : 76+4*difatInHeader])
 	next := le.Uint32(h[68:])
+	seen := make([]uint64, (f.nSectors+63)/64) // a DIFAT sector is met once
 	for i := int64(0); i < nDIFAT; i++ {
-		if int64(next) >= f.nSectors {
-			return fmt.Errorf("%w: DIFAT sector %#x out of range", ErrFormat, next)
+		if int64(next) >= f.nSectors || seen[next/64]&(1<<(next%64)) != 0 {
+			return fmt.Errorf("%w: DIFAT sector %#x out of range or met twice", ErrFormat, next)
 		}
+		seen[next/64] |= 1 << (next % 64)
 		b, err := f.sector(next)
 		if err != nil {
 			return err

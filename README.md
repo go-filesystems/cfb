@@ -55,9 +55,12 @@ linear.
 
 100 % statement coverage, `-race`, s390x under QEMU, `govulncheck`, and a fuzz
 target (`FuzzOpen`) whose corpus is committed in `testdata/`. The tests build
-files with `cfbtest`, a test-only writer (v3, v4, DIFAT, mini streams,
-fragmented chains); no file written by Word, LibreOffice or any Microsoft
-tool is committed, and none was available to generate.
+files with `cfbtest`, a writer of test images (v3, v4, DIFAT, mini streams,
+fragmented chains). `cfbtest` is a public package, versioned with the module:
+`Build`, `Node`, `Storage` and `Stream`. It exists to make well-formed test
+images, is not hardened for untrusted input, and is not a general MS-CFB
+writer. No file written by Word, LibreOffice or any Microsoft tool is
+committed, and none was available to generate.
 
 ## References
 

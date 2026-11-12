@@ -177,3 +177,37 @@ func TestWriteFuzzSeeds(t *testing.T) {
 		}
 	}
 }
+
+// A DIFAT chain that loops is refused even when the sectors it supplies are
+// already enough: the walk used to stop after nDIFAT sectors and accept it.
+func TestDIFATLoopWithEnoughFATIDs(t *testing.T) {
+	le := binary.LittleEndian
+	data, lay := build(3, storage("Root Entry", stream("s", []byte("x"))), false)
+	fatID := uint32(lay.FatOff/512 - 1)
+	first := uint32((len(data) - 1) / 512) // the sector appended below
+	sec := make([]byte, 512)
+	for i := 0; i < 127; i++ {
+		le.PutUint32(sec[4*i:], freeSect)
+	}
+	le.PutUint32(sec[0:], fatID) // the one FAT sector, found through the DIFAT
+	le.PutUint32(sec[508:], first)
+	mk := func(nDIFAT uint32) []byte {
+		b := append(append([]byte(nil), data...), sec...)
+		for i := 0; i < difatInHeader; i++ {
+			le.PutUint32(b[76+4*i:], freeSect) // nothing in the header's own DIFAT
+		}
+		le.PutUint32(b[68:], first)
+		le.PutUint32(b[72:], nDIFAT)
+		return b
+	}
+	// Control: one DIFAT sector, which is all there is, opens.
+	b := mk(1)
+	if _, err := Open(bytes.NewReader(b), int64(len(b))); err != nil {
+		t.Fatalf("one DIFAT sector: %v", err)
+	}
+	// The sector pointing at itself, declared twice: the second visit is a loop.
+	b = mk(2)
+	if _, err := Open(bytes.NewReader(b), int64(len(b))); !errors.Is(err, ErrFormat) {
+		t.Fatalf("a DIFAT loop that still supplies the FAT ids: %v", err)
+	}
+}
