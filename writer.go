@@ -52,8 +52,12 @@ type wnode struct {
 // version 3 (512-byte sectors) by default, or version 4 (4096-byte sectors)
 // with WithVersion(4); a FAT, a DIFAT when the FAT needs more than 109
 // sectors, a mini FAT and mini stream for streams under 4096 bytes, and the
-// directory, with sibling trees whose nodes are all black (a valid red-black
-// tree: MS-CFB permits it) and balanced. What it writes is read back by Open.
+// directory, with balanced sibling trees whose nodes are all black. MS-CFB
+// 2.6.4 states the invariants (root black, no two consecutive red nodes, left
+// sorts before right) and that "the simplest implementation of the preceding
+// invariants would be to mark every node as black, in which case the tree is
+// simply a binary tree"; it has no black-height rule. What it writes is read
+// back by Open.
 //
 // A Writer refuses what MS-CFB does not allow and what would be unreasonable
 // to hold (see WithLimits); it is not safe for concurrent use.
@@ -290,8 +294,13 @@ func (w *Writer) WriteTo(dst io.Writer) (int64, error) {
 	for _, v := range miniFAT {
 		miniBytes = le.AppendUint32(miniBytes, v)
 	}
+	// MS-CFB: unused FAT entries are FREESECT, so the last mini FAT sector is
+	// padded with FREESECT, not zeros (zero is a valid sector number).
+	for len(miniBytes)%ssize != 0 {
+		miniBytes = le.AppendUint32(miniBytes, freeSect)
+	}
 	firstMini := alloc(miniBytes)
-	nMini := uint32((len(miniBytes) + ssize - 1) / ssize)
+	nMini := uint32(len(miniBytes) / ssize)
 	// The directory, padded with unallocated entries to a whole sector.
 	dir := make([]byte, 0, len(ents)*dirEntrySize)
 	for _, e := range ents {

@@ -41,7 +41,9 @@ _, err = w.WriteTo(file)
 A `Writer` builds the file in memory and writes version 3 or 4: the FAT, the
 DIFAT when the FAT needs more than 109 sectors, the mini FAT and mini stream for
 streams under 4096 bytes, and the directory, whose sibling trees are balanced
-with every node black (a valid red-black tree). `Open` reads back what it
+with every node black, which MS-CFB 2.6.4 allows ("the simplest implementation
+of the preceding invariants would be to mark every node as black, in which case
+the tree is simply a binary tree"; it states no black-height rule). `Open` reads back what it
 writes: names, kinds, content, CLSIDs, state bits and times (to 100 ns).
 
 It refuses what MS-CFB does not allow, with `ErrArgument`: an empty name, one

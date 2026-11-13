@@ -2,6 +2,7 @@ package cfb
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"math/rand/v2"
 	"strings"
@@ -112,6 +113,167 @@ func TestWriterDIFAT(t *testing.T) {
 	if err != nil || !bytes.Equal(got, big) {
 		t.Fatalf("huge: %v", err)
 	}
+}
+
+// checkRaw reads the bytes of a written file with its own few lines, not with
+// Open, and asserts what MS-CFB 2.1 and 2.3 require of the allocation tables:
+// FAT sectors are marked FATSECT, DIFAT sectors DIFSECT, every chain ends with
+// ENDOFCHAIN, the DIFAT chain too, and every unused FAT, mini FAT and DIFAT
+// slot is FREESECT (zero is a valid sector number).
+func checkRaw(t *testing.T, data []byte, wantDIFAT int) {
+	t.Helper()
+	le := binary.LittleEndian
+	ssize := 1 << le.Uint16(data[30:])
+	per := ssize / 4
+	nSec := len(data)/ssize - 1
+	sector := func(id uint32) []byte {
+		if int(id) >= nSec {
+			t.Fatalf("sector %d beyond the file (%d sectors)", id, nSec)
+		}
+		return data[(int(id)+1)*ssize : (int(id)+2)*ssize]
+	}
+	nFAT, nDIFAT := int(le.Uint32(data[44:])), int(le.Uint32(data[72:]))
+	if nDIFAT != wantDIFAT {
+		t.Fatalf("%d DIFAT sectors, want %d", nDIFAT, wantDIFAT)
+	}
+	// The FAT sector numbers: the header's 109, then the DIFAT chain.
+	var fatIDs []uint32
+	for i := 0; i < difatInHeader; i++ {
+		v := le.Uint32(data[76+4*i:])
+		if (i < nFAT) == (v == freeSect) {
+			t.Fatalf("header DIFAT[%d] = %#x with %d FAT sectors", i, v, nFAT)
+		}
+		if v != freeSect {
+			fatIDs = append(fatIDs, v)
+		}
+	}
+	next := le.Uint32(data[68:])
+	var difIDs []uint32
+	for i := 0; i < nDIFAT; i++ {
+		difIDs = append(difIDs, next)
+		sec := sector(next)
+		for j := 0; j < per-1; j++ {
+			if v := le.Uint32(sec[4*j:]); v != freeSect {
+				fatIDs = append(fatIDs, v)
+			}
+		}
+		next = le.Uint32(sec[4*(per-1):])
+	}
+	if next != endOfChain {
+		t.Fatalf("the DIFAT chain ends with %#x, not ENDOFCHAIN", next)
+	}
+	if len(fatIDs) != nFAT {
+		t.Fatalf("%d FAT sector numbers, header says %d", len(fatIDs), nFAT)
+	}
+	var fat []uint32
+	for _, id := range fatIDs {
+		sec := sector(id)
+		for j := 0; j < per; j++ {
+			fat = append(fat, le.Uint32(sec[4*j:]))
+		}
+	}
+	for _, id := range fatIDs {
+		if fat[id] != fatSect {
+			t.Fatalf("FAT sector %d is marked %#x, not FATSECT", id, fat[id])
+		}
+	}
+	for _, id := range difIDs {
+		if fat[id] != difSect {
+			t.Fatalf("DIFAT sector %d is marked %#x, not DIFSECT", id, fat[id])
+		}
+	}
+	nf, nd := 0, 0
+	for i, v := range fat {
+		switch {
+		case v == fatSect:
+			nf++
+		case v == difSect:
+			nd++
+		case i >= nSec && v != freeSect:
+			t.Fatalf("FAT[%d] = %#x beyond the last sector, not FREESECT", i, v)
+		}
+	}
+	if nf != nFAT || nd != nDIFAT {
+		t.Fatalf("%d FATSECT and %d DIFSECT entries, want %d and %d", nf, nd, nFAT, nDIFAT)
+	}
+	// walk follows a chain, which must end with ENDOFCHAIN, and returns it.
+	walk := func(what string, start uint32) [][]byte {
+		var out [][]byte
+		for id := start; id != endOfChain; id = fat[id] {
+			if len(out) > nSec || int(id) >= nSec {
+				t.Fatalf("%s: chain loops or leaves the file at %#x", what, id)
+			}
+			out = append(out, sector(id))
+		}
+		return out
+	}
+	dirSecs := walk("directory", le.Uint32(data[48:]))
+	var dir []byte
+	for _, s := range dirSecs {
+		dir = append(dir, s...)
+	}
+	root := dir[:dirEntrySize]
+	miniSize := le.Uint64(root[120:])
+	var miniFAT []uint32
+	nMini := int(le.Uint32(data[64:]))
+	if nMini > 0 {
+		secs := walk("mini FAT", le.Uint32(data[60:]))
+		if len(secs) != nMini {
+			t.Fatalf("mini FAT: %d sectors, header says %d", len(secs), nMini)
+		}
+		for _, s := range secs {
+			for j := 0; j < per; j++ {
+				miniFAT = append(miniFAT, le.Uint32(s[4*j:]))
+			}
+		}
+	}
+	usedMini := int((miniSize + miniSectorSize - 1) / miniSectorSize)
+	for i, v := range miniFAT {
+		if (i < usedMini) == (v == freeSect) {
+			t.Fatalf("mini FAT[%d] = %#x with %d mini sectors in use", i, v, usedMini)
+		}
+	}
+	if usedMini > 0 {
+		walk("mini stream", le.Uint32(root[116:]))
+	}
+	for i := 1; i*dirEntrySize < len(dir); i++ {
+		e := dir[i*dirEntrySize : (i+1)*dirEntrySize]
+		if e[66] == 2 && le.Uint64(e[120:]) >= miniCutoff {
+			walk("stream", le.Uint32(e[116:]))
+		}
+	}
+}
+
+func TestWriterRawStructure(t *testing.T) {
+	for _, version := range []int{3, 4} {
+		for _, gaps := range []bool{false, true} {
+			for _, n := range []int{0, 1, 3, 70} { // 70 mini streams: the mini FAT spills over a sector in v3
+				opts := []WriterOption{WithVersion(version)}
+				if gaps {
+					opts = append(opts, WithFreeSectorGaps())
+				}
+				w := NewWriter(opts...)
+				for i := 0; i < n; i++ {
+					if err := w.AddStream(strings.Repeat("s", 1)+string(rune('A'+i%26))+string(rune('a'+i/26)), rnd(100+i, uint64(i)), Attrs{}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := w.AddStream("big", rnd(9000, 1), Attrs{}); err != nil {
+					t.Fatal(err)
+				}
+				checkRaw(t, written(t, w), 0)
+			}
+		}
+	}
+	// 17 MiB: 272 FAT sectors, 163 beyond the header's 109, so 2 DIFAT sectors.
+	w := NewWriter(WithLimits(10, 32<<20))
+	if err := w.AddStream("huge", rnd(17<<20, 9), Attrs{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.AddStream("mini", rnd(100, 9), Attrs{}); err != nil {
+		t.Fatal(err)
+	}
+	checkRaw(t, written(t, w), 2)
 }
 
 func TestWriterRefusals(t *testing.T) {
