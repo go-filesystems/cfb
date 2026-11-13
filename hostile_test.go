@@ -10,15 +10,13 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/go-filesystems/cfb/cfbtest"
 )
 
 // miniPair is a file with two 64-byte mini streams, "a" in mini sector 0 and
 // "b" in mini sector 1, and where its root directory entry is.
 func miniPair() ([]byte, layout) {
 	a, b := bytes.Repeat([]byte{0xAA}, 64), bytes.Repeat([]byte{0xBB}, 64)
-	return cfbtest.Build(3, cfbtest.Storage("Root Entry", cfbtest.Stream("a", a), cfbtest.Stream("b", b)), false)
+	return build(3, storage("Root Entry", stream("a", a), stream("b", b)), false)
 }
 
 // A mini stream shorter than its mini FAT chains used to be zero-filled
