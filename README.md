@@ -88,6 +88,20 @@ not hardened for untrusted input (a bad tree panics). No file written by Word,
 LibreOffice or any Microsoft tool is committed, and none was available to
 generate.
 
+## Judged by
+
+CFB is not a kernel filesystem, so the judge is independent software:
+Python's `olefile` (reader) and libgsf's `gsf createole` (writer), run in a Tart
+VM by [kerneljudge](https://github.com/go-filesystems/kerneljudge) (`kerneljudge
+run --driver <clone>`; the test is `kerneljudge_test.go`, behind
+`FS_KERNEL_JUDGE=1`). A fixed corpus (nested storages, UTF-8 names, empty, 1-byte,
+odd-sized, 1 MiB and 32 MiB streams) is written by this `Writer` (versions 3 and
+4) and by `gsf createole`; olefile and this reader each compare the tree, every
+stream's size and SHA-256 with it: all pass in both directions, and no defect
+was found. The seven ZED archives written by go-fde/zed (copied into the VM for
+the run and removed after it) are read by olefile and by this reader with
+identical trees and identical stream bytes.
+
 ## References
 
 [MS-CFB] Compound File Binary File Format (Microsoft Open Specifications): the
