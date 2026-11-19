@@ -1,6 +1,6 @@
 module github.com/go-filesystems/cfb
 
-go 1.27.1
+go 1.27.4
 
 require github.com/go-filesystems/kerneljudge v0.4.0
 
